@@ -1,8 +1,19 @@
 # 3DS Controller
-An up-to-date 3DS homebrew application that lets you use your Nintendo 3DS as a wireless controller for Windows and Linux.
 
-# I'm aware of the issues (no im not dead)
-- my 3ds is broken though. i wanna buy a n2ds xl so i can continue maintaining this
+### An up-to-date 3DS homebrew application that lets you use your (New or Old) Nintendo 3DS or 2DS as a wireless controller for Windows and Linux.
+
+My fork! I initially wasn't going to publish this, but it ended up being so much better that I thought the rest of the world needed this, too. I'm no 3DS developer, or even a C developer, so these changes are made by Claude. See the CHANGELOG.md for another note on AI. I haven't experienced any new bugs so far that I haven't already gotten fixed by Claude.
+
+:)
+
+### Fixes:
+- ZL, ZR, and C-stick now work from a tiny fix. Before, they didn't do anything as a result of `pc.py` not mapping them correctly.
+- Fixed a bug that would disconnect the 3DS quite often. The connection is very stable now (dependent on your wifi)
+- The screen doesn't flash anymore
+- Turning off the LCD and then pressing Home doesn't crash the system; it just turns the LCD back on.
+- Minor cosmetic repair
+
+##Original Readme text:
 
 ## Features
 - Use your 3DS as a wireless gamepad for PC games and emulators
