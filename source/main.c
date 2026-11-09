@@ -12,11 +12,12 @@
 
 #define DEFAULT_PORT 8888
 #define DEFAULT_SERVER_IP "192.168.1.1"
-#define CONFIG_FILE "config.ini"
+#define CONFIG_FILE "config.ini"   // keep relative: "sdmc:/config.ini" hung at startup in testing
 #define MAX_LINE 256
 #define LCD_TOGGLE_KEY KEY_SELECT
 #define CONNECTION_TIMEOUT_MS 5000
 #define LCD_TOGGLE_HOLD_TIME 5000  // 5 seconds hold time for LCD toggle
+#define MAX_MISSED_PINGS 3         // consecutive missed pongs before reconnecting
 
 typedef struct {
     u32 buttons;            
@@ -105,8 +106,6 @@ int initsocket(const config *cfg) {
     int flags = fcntl(sockfd, F_GETFL, 0);
     fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
     
-    // Remove the problematic setsockopt line completely
-    
     return sockfd;
 }
 
@@ -177,40 +176,52 @@ void printstatusmessage(int sockfd, const config *cfg, int isconnected, int lcds
     char batterystatus[32];
     getbatterystatus(batterystatus, sizeof(batterystatus));
     
-    printf("\x1b[0;0H+----------------------+");
-    printf("\x1b[1;0H|    \x1b[1;36m3DS CONTROLLER\x1b[0m    |");
-    printf("\x1b[2;0H+----------------------+");
+    printf("\x1b[0;0H+-------------------------+");
+    printf("\x1b[1;0H|      \x1b[1;36m3DS CONTROLLER\x1b[0m     |");
+    printf("\x1b[2;0H+-------------------------+");
     
     if (isconnected) {
-        printf("\x1b[3;0H| Status: \x1b[32mCONNECTED\x1b[0m    |");
+        printf("\x1b[3;0H| Status: \x1b[32mCONNECTED\x1b[0m       |");
     } else {
-        printf("\x1b[3;0H| Status: \x1b[31mNO CONNECTION\x1b[0m |");
+        printf("\x1b[3;0H| Status: \x1b[31mNO CONNECTION\x1b[0m   |");
     }
     
-    printf("\x1b[4;0H| IP: %-16s |", cfg->serverip);
-    printf("\x1b[5;0H| Port: %-15d |", cfg->port);
-    printf("\x1b[6;0H| Battery: %-11s |", batterystatus);
+    printf("\x1b[4;0H| IP: %-16s    |", cfg->serverip);
+    printf("\x1b[5;0H| Port: %-15d   |", cfg->port);
+    printf("\x1b[6;0H| Battery: %-11s   |", batterystatus);
     
     if (lcdstate) {
-        printf("\x1b[7;0H| Display: \x1b[32mON\x1b[0m           |");
+        printf("\x1b[7;0H| Display: \x1b[32mON\x1b[0m             |");
     } else {
-        printf("\x1b[7;0H| Display: \x1b[31mOFF\x1b[0m          |");
+        printf("\x1b[7;0H| Display: \x1b[31mOFF\x1b[0m            |");
     }
     
-    printf("\x1b[8;0H+----------------------+");
-    printf("\x1b[9;0H|      \x1b[1;33mCONTROLS\x1b[0m       |");
-    printf("\x1b[10;0H| CirclePad: Left Stick |");
-    printf("\x1b[11;0H| C-Stick: Right Stick  |");
-    printf("\x1b[12;0H| A/B/X/Y: Face Buttons |");
-    printf("\x1b[13;0H| L/R/ZL/ZR: Triggers   |");
-    printf("\x1b[14;0H| D-Pad: Directional    |");
-    printf("\x1b[15;0H| Hold SELECT: Toggle LCD|");
-    printf("\x1b[16;0H| START+SELECT: Exit    |");
-    printf("\x1b[17;0H+----------------------+");
+    printf("\x1b[8;0H+-------------------------+");
+    printf("\x1b[9;0H|      \x1b[1;33mCONTROLS\x1b[0m           |");
+    printf("\x1b[10;0H| CirclePad: Left Stick   |");
+    printf("\x1b[11;0H| C-Stick: Right Stick    |");
+    printf("\x1b[12;0H| A/B/X/Y: Face Buttons   |");
+    printf("\x1b[13;0H| L/R/ZL/ZR: Triggers     |");
+    printf("\x1b[14;0H| D-Pad: Directional      |");
+    printf("\x1b[15;0H| Hold SELECT: Toggle LCD |");
+    printf("\x1b[16;0H| START+SELECT: Exit      |");
+    printf("\x1b[17;0H+-------------------------+");
+}
+
+// Turn the backlight on or off. The LCD service is opened only for the
+// instant it is needed and closed again right away, so no session to it is
+// held open while the app is suspended (HOME button) or exiting.
+static void lcdset(int on) {
+    if (R_FAILED(gspLcdInit())) return;
+    if (on) GSPLCD_PowerOnBacklight(GSPLCD_SCREEN_BOTH);
+    else    GSPLCD_PowerOffBacklight(GSPLCD_SCREEN_BOTH);
+    gspLcdExit();
 }
 
 int main(int argc, char **argv) {
     gfxInitDefault();
+    // If the status panel still flickers, uncomment the next line:
+    // gfxSetDoubleBuffering(GFX_TOP, false);
     consoleInit(GFX_TOP, NULL);
     
     socInit((u32*)memalign(0x1000, 0x100000), 0x100000);
@@ -225,8 +236,13 @@ int main(int argc, char **argv) {
     int sockfd = initsocket(&cfg);
     int isconnected = 0;
     int lcdstate = 1;
+    int missedpings = 0;
     u32 lcdtoggleheldtime = 0;
     u32 connectionchecktime = 0;
+    
+    // Last values drawn in the status panel; used to redraw only on change
+    int lastconn = -1, lastlcd = -1;
+    char lastbatt[32] = "";
     
     printf("\ncalibrating circle pad...\n");
     printf("leave circle pad untouched\n");
@@ -248,19 +264,40 @@ int main(int argc, char **argv) {
         if ((keysdown & KEY_START) && (keysdown & KEY_SELECT)) 
             break;
         
+        // HOME is blocked while the display is off. If it is pressed anyway,
+        // turn the display back on and allow HOME again; the next press opens
+        // the Home Menu normally. This avoids suspending with the backlight off.
+        if (aptCheckHomePressRejected()) {
+            lcdstate = 1;
+            lcdset(1);
+            aptSetHomeAllowed(true);
+        }
+        
         u32 currenttime = osGetTime();
         
-        // Check connection more frequently
+        // Ping once per second; only tear down the socket after
+        // MAX_MISSED_PINGS consecutive misses so a single dropped
+        // UDP packet doesn't cause a disconnect/reconnect.
         if (currenttime - connectionchecktime > 1000) {
-            isconnected = checkconnection(sockfd);
-            connectionchecktime = currenttime;
+            if (checkconnection(sockfd)) {
+                missedpings = 0;
+                isconnected = 1;
+            } else {
+                missedpings++;
+                if (missedpings >= MAX_MISSED_PINGS) {
+                    isconnected = 0;
+                    if (sockfd >= 0) {
+                        close(sockfd);
+                        sockfd = -1;
+                    }
+                }
+            }
             
-            if (!isconnected && sockfd >= 0) {
-                close(sockfd);
-                sockfd = -1;
-            } else if (!isconnected && sockfd < 0) {
+            if (sockfd < 0) {
                 sockfd = initsocket(&cfg);
             }
+            
+            connectionchecktime = currenttime;
         }
         
         // Handle LCD toggle with SELECT button only, 5 second hold time
@@ -269,12 +306,8 @@ int main(int argc, char **argv) {
                 lcdtoggleheldtime = currenttime;
             } else if (currenttime - lcdtoggleheldtime > LCD_TOGGLE_HOLD_TIME) {
                 lcdstate = !lcdstate;
-                if (lcdstate) {
-                    gspLcdInit();
-                    GSPLCD_PowerOnBacklight(GSPLCD_SCREEN_BOTH);
-                } else {
-                    GSPLCD_PowerOffBacklight(GSPLCD_SCREEN_BOTH);
-                }
+                lcdset(lcdstate);
+                aptSetHomeAllowed(lcdstate ? true : false);
                 lcdtoggleheldtime = currenttime;
             }
         } else {
@@ -288,15 +321,23 @@ int main(int argc, char **argv) {
         hidCircleRead(&state.circlepad);
         hidCstickRead(&state.cstick);
         
-        if (isconnected) {
-            if (sendcontrollerstate(sockfd, &state) < 0) {
-                // If send fails, mark as disconnected to trigger reconnect
-                isconnected = 0;
-            }
+        if (isconnected && sockfd >= 0) {
+            // Don't flip to disconnected on a single failed send;
+            // the ping check above handles real connection loss.
+            sendcontrollerstate(sockfd, &state);
         }
         
+        // Redraw the status panel only when something visible changed,
+        // to avoid the clear-and-redraw flicker.
         if (currenttime - laststatusupdate > 1000) {
-            printstatusmessage(sockfd, &cfg, isconnected, lcdstate);
+            char batt[32];
+            getbatterystatus(batt, sizeof(batt));
+            if (isconnected != lastconn || lcdstate != lastlcd || strcmp(batt, lastbatt) != 0) {
+                printstatusmessage(sockfd, &cfg, isconnected, lcdstate);
+                lastconn = isconnected;
+                lastlcd = lcdstate;
+                strcpy(lastbatt, batt);
+            }
             laststatusupdate = currenttime;
         }
         
@@ -311,6 +352,11 @@ int main(int argc, char **argv) {
     
     if (sockfd >= 0) {
         close(sockfd);
+    }
+    
+    // Never leave the screens dark on exit
+    if (!lcdstate) {
+        lcdset(1);
     }
     
     ptmuExit();
