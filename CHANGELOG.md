@@ -1,6 +1,6 @@
 # Changelog
 
-Changes in this fork relative to [icicle1133/3ds-Controller](https://github.com/icicle1133/3ds-Controller).
+## v2.0.0
 
 ## Acknowledgement of AI Use
 
@@ -8,7 +8,75 @@ This section was written entirely by me, Guzzler829, on my keyboard. The rest of
 
 I advocate for limited use of AI; where you can, make do without it. 3ds-Controller is a great tool that I'm starting to use a lot, and the frequent disconnections were incredibly frustrating; using Claude to fix it has helped me out a lot, and I hope it helps others too by being available here on my github. All credit to the original creator, and to all the millions of programmers over the decades whose code has helped train Claude and other AI tools. Always use AI responsibly, and always keep in mind the great cost of running large language models: great electricity usage, demand for, and therefore shortage of computing hardware, including RAM, SSDs, and GPUs; environmental impact, societal impact, etc.
 
-## Summary
+## Touch!
+
+Touchscreen controls: the 3DS can now be a **mouse** and a **keyboard** as well as a gamepad.
+
+### New: three modes, switched from the bottom screen
+Three short buttons (24 px tall, each a third of the screen, each with a simple icon) run along the top of the bottom screen.
+
+| Mode | Bottom screen | What it does |
+|---|---|---|
+| **Controller** (default) | black, only the three buttons | gamepad, exactly as in v1.1.0 |
+| **Mouse** | very dark gray trackpad | touch moves the cursor like a laptop touchpad |
+| **Keyboard** | full on-screen keyboard | type with the stylus or a finger |
+
+The top screen always shows the connection status, server, battery and display state, plus the list of controls for the current mode. On an old 3DS, ZL, ZR and the C-Stick are never listed or offered; on a New 3DS they are.
+
+### New: mouse mode
+- **Touch** moves the cursor (relative movement, so it works like a trackpad). A small movement tolerance stops a tap from nudging the cursor, and fast swipes accelerate slightly.
+- **Tap** (a short touch without moving) is a left click.
+- **A / L:** left click. **B / R:** right click. **Y / ZL:** back. **X / ZR:** forward. **START:** Enter. **D-Pad:** arrow keys.
+- **Circle Pad** and **C-Stick** each have a toggle at the bottom of the screen: move the cursor, or scroll up and down. The C-Stick toggle only exists on a New 3DS. Defaults: Circle Pad moves, C-Stick scrolls.
+
+### New: keyboard mode
+- 83 keys in a standard layout: Esc and F1-F12, number row, QWERTY, Caps, Enter, Backspace, Tab, left and right Shift/Ctrl/Alt, a Windows key (four-square logo), Menu, Space, and an Ins/Home/PgUp/PgDn/End/arrow row.
+- **Ctrl, Alt, Shift and Win are toggles.** Tap to light one up; any number can be lit at once. They stay lit until a regular key is pressed, then switch off. Ctrl, Alt, then T sends Ctrl+Alt+T.
+- Tapping a lit **Win** key again sends a lone Windows key press (opens the Start menu) and turns it off.
+- The physical buttons work as in mouse mode (the same mapping), so START is Enter and the D-Pad moves the arrows.
+- Switching modes switches every toggle off, so no modifier can get stuck.
+
+### Changed: 3DS app
+- Both screens are drawn with citro2d now. **The project Makefile needs one change:** `LIBS := -lcitro2d -lcitro3d -lctru -lm`.
+- The code is split into `main.c` (networking and the top screen), `touchui.c/h` (the bottom screen) and `protocol.h` (the packet).
+- The connection check no longer blocks. Before, a missing reply froze the whole app for up to a second, which would make the touch screen unusable. It now sends a ping once a second, reads replies without waiting, counts as connected for 3.5 s after the last reply, and rebuilds the socket after 6 s of silence.
+- "New 3DS" is detected with `APT_CheckNew3DS`, which uses the APT service the CIA already has access to, so `app.rsf` needs no changes.
+
+### Changed: `pc.py`
+- Rewritten around a `Bridge` class that decides what each packet means, with small `LinuxBackend` and `WindowsBackend` classes for the operating-system calls.
+- **Linux:** three virtual devices (gamepad, mouse, keyboard). The gamepad now only sends values that changed.
+- **Windows:** vgamepad for the gamepad, SendInput for the mouse and keyboard (no new packages needed).
+- Presses and releases are ordered so chords work: modifiers go down before the key, and the key comes up before the modifiers.
+- Mouse buttons and keys are released automatically when the mode changes, and if no packets arrive for one second, so nothing is left stuck down if the 3DS drops off.
+- The 10 ms packet throttle is gone: dropping a packet would have lost mouse movement.
+- Old 12-byte packets from a v1.x app still work, as controller mode.
+
+### Packet format (3DS to PC, 22 bytes, little-endian)
+
+| Bytes | Type | Field |
+|---|---|---|
+| 0-3 | u32 | buttons (same bits as before) |
+| 4-11 | 4 x s16 | Circle Pad x/y, C-Stick x/y (same as before) |
+| 12 | u8 | mode: 0 controller, 1 mouse, 2 keyboard |
+| 13 | u8 | flags: bit 0 Circle Pad scrolls, bit 1 C-Stick scrolls, bit 2 New 3DS |
+| 14-17 | 2 x s16 | trackpad movement since the last packet (cursor pixels) |
+| 18 | u8 | mouse buttons from the touchscreen (bit 0: a tap, left click) |
+| 19 | u8 | modifiers: bit n is USB HID key 0xE0 + n (Ctrl, Shift, Alt, Win; left then right) |
+| 20 | u8 | typed key as a USB HID usage ID (0 = none) |
+| 21 | u8 | reserved |
+
+### Known limitations
+- The touchscreen is single-touch, so you cannot hold a key and press another one; use the toggles for modifiers.
+- Latched modifiers are held down on the PC while lit. Pressing Alt alone and releasing it can focus the menu bar in some Windows programs.
+- Typed keys use virtual-key codes on Windows, so a few games that read raw scan codes may not see them.
+
+---
+
+## v1.1.0
+
+Changes in this fork relative to [icicle1133/3ds-Controller](https://github.com/icicle1133/3ds-Controller).
+
+### Summary
 
 - **Fixed:** ZL, ZR and C-stick input on New 3DS were not reaching the PC.
 - **Fixed:** frequent disconnect/reconnect cycles.
@@ -19,7 +87,7 @@ I advocate for limited use of AI; where you can, make do without it. 3ds-Control
 
 The 3DS app (`main.c`) already sent ZL, ZR and C-stick data. The ZL/ZR/C-stick bugs were entirely in the PC receiver (`pc.py`).
 
-## Packet format (reference)
+### Packet format (reference)
 
 The 3DS sends a 12-byte UDP packet, little-endian, no padding:
 
@@ -35,9 +103,9 @@ Button bits follow libctru's `KEY_*` values. ZL and ZR are bits 14 and 15 (New 3
 
 ---
 
-## `pc.py`
+### `pc.py`
 
-### Fixed: ZL / ZR bit positions
+#### Fixed: ZL / ZR bit positions
 `KEY_ZL` and `KEY_ZR` were defined as `4096` and `8192` (bits 12 and 13). libctru defines them as bits 14 and 15, so ZL/ZR presses were never detected.
 
 ```python
@@ -48,7 +116,7 @@ KEY_R, KEY_L, KEY_X, KEY_Y = 256, 512, 1024, 2048
 KEY_ZL, KEY_ZR = 16384, 32768
 ```
 
-### Fixed: C-stick read from the wrong offset
+#### Fixed: C-stick read from the wrong offset
 Both `handle_linux_controller` and `handle_windows_controller` read the C-stick from bytes 12-15, which don't exist in the 12-byte packet, so the C-stick always read as 0. The C-stick is at bytes 8-11. All four axes are now unpacked in one call:
 
 ```python
@@ -58,53 +126,53 @@ cstick_x, cstick_y = struct.unpack("=h", data[12:14])[0] if len(data) >= 14 else
 circlepad_x, circlepad_y, cstick_x, cstick_y = struct.unpack("=hhhh", data[4:12])
 ```
 
-### Fixed: packet length check
+#### Fixed: packet length check
 `handle_controller_state` accepted packets of 8 bytes or more, which would let a truncated packet through to the C-stick unpack. It now requires the full 12 bytes (`len(data) >= 12`).
 
-### Added: ZL / ZR as buttons (Linux)
+#### Added: ZL / ZR as buttons (Linux)
 In addition to the existing `ABS_Z` / `ABS_RZ` analog axes, ZL and ZR now emit `BTN_TL2` and `BTN_TR2`, which are declared in the uinput device's event list. Many emulators and games expect the triggers as buttons.
 
-### Fixed: dropped pings caused spurious disconnects
+#### Fixed: dropped pings caused spurious disconnects
 `handle_controller_state` applied the 10 ms throttle *before* answering `ping`. A ping arriving within 10 ms of another packet was silently discarded, no `pong` was sent, and the 3DS treated the connection as dead. Pings are now answered before the throttle check.
 
 ---
 
-## `main.c`
+### `main.c`
 
-### Changed: reconnect only after repeated missed pings
+#### Changed: reconnect only after repeated missed pings
 Previously a single missed `pong` (one dropped UDP packet over Wi-Fi) closed the socket and reconnected. The app now requires `MAX_MISSED_PINGS` (default `3`) consecutive misses before tearing down the connection. A successful pong resets the counter.
 
-### Changed: a single failed `send()` no longer marks the app disconnected
+#### Changed: a single failed `send()` no longer marks the app disconnected
 Real connection loss is detected by the ping check instead. Sending is also guarded with `sockfd >= 0`.
 
-### Fixed: first LCD toggle could silently fail
+#### Fixed: first LCD toggle could silently fail
 `gspLcdInit()` was only called in the "display on" branch of the toggle, so the first "off" request ran before the LCD service was initialized. The status line flipped to "Display: OFF" but the backlight stayed on. All backlight changes now go through a small `lcdset()` helper that opens the LCD service, sets the backlight, and closes the service again.
 
-### Changed: HOME is blocked while the display is off
+#### Changed: HOME is blocked while the display is off
 Holding the `gsp::Lcd` service open for the whole run, or calling it from an APT suspend hook, caused the system to crash when HOME was pressed (the original `main.c` did not crash). The LCD service is now only open for the instant it is used. While the display is off, HOME is disabled with `aptSetHomeAllowed(false)`. If HOME is pressed anyway, `aptCheckHomePressRejected()` fires, the display is turned back on, and HOME is allowed again, so the next press opens the Home Menu normally. The backlight is also restored on exit if the display was off.
 
-### Changed: status panel redraws only on change
+#### Changed: status panel redraws only on change
 `printstatusmessage()` cleared and redrew the whole panel every second, which caused an occasional flicker when the display scanned out mid-redraw. The panel is now redrawn only when the connection state, LCD state or battery reading changes. If flicker persists, uncomment `gfxSetDoubleBuffering(GFX_TOP, false);` near the top of `main()`.
 
-### Changed: wider status panel layout
+#### Changed: wider status panel layout
 The status panel box is 27 columns wide (was 24), with the padding in each `printf()` adjusted so the borders line up on the 3DS console.
 
-### Unchanged
+#### Unchanged
 ZL/ZR (`hidKeysHeld()`) and the C-stick (`hidCstickRead()`) were already read and transmitted correctly. The config file path remains the relative `config.ini`.
 
 > **Note:** an attempt to use `#define CONFIG_FILE "sdmc:/config.ini"` caused the app to hang at startup in testing. Keep the relative path.
 
-### Known limitation
+#### Known limitation
 Closing the lid (sleep mode) with the display toggled off has not been tested.
 
 ---
 
-## Build / packaging notes
+### Build / packaging notes
 
 - **`app.rsf`:** for a `.cia` build, the `ServiceAccessControl` list needs `gsp::Lcd` (screen on/off toggle) in addition to the network, battery and input services. Using the canonical service names (`fs:USER`, `hid:USER`, `soc:U`, `ptm:u`, `gsp::Gpu`, `gsp::Lcd`, `ac:u`, `ndm:u`, `APT:U`) is the safe choice.
 - **Reinstalling a CIA:** if the Home Menu icon doesn't update after reinstalling, delete the old title under *System Settings -> Data Management -> Nintendo 3DS -> Software* first, then reinstall. Home Menu can keep the stale icon otherwise.
 - **Config:** on first launch the app creates a default `config.ini` (`serverip=192.168.1.1`). Edit it to your PC's local IP. Reserving a static IP for your PC in your router avoids having to change it later.
 
-## Credits
+### Credits
 
 Original project by [icicle1133](https://github.com/icicle1133/3ds-Controller).
