@@ -43,7 +43,7 @@ GFXBUILD	:=	$(BUILD)
 
 APP_TITLE       := 3DS Controller
 APP_DESCRIPTION := Use 3DS as a wireless PC controller
-APP_AUTHOR      := Your Name
+APP_AUTHOR      := icicle1133
 APP_PRODUCT_CODE := CTR-P-3DSC
 APP_UNIQUE_ID   := 0xA1B2C
 
@@ -72,7 +72,7 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lctru -lm
+LIBS	:= -lcitro2d -lcitro3d -lctru -lm
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
