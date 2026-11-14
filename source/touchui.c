@@ -1,6 +1,8 @@
 #include "touchui.h"
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
+#include <arpa/inet.h>
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -22,22 +24,43 @@
 #define KEYBOARD_TOP  26.0f
 #define KEY_UNIT      (BOTTOM_W / 15.0f)   // the keyboard is 15 key-widths wide
 
-enum { TARGET_NONE, TARGET_BAR, TARGET_PAD, TARGET_CHIP, TARGET_KEY };
+// The "Change IP?" button sits right under the Keyboard button (the right-hand third of the bar)
+#define CHANGE_IP_X   (BOTTOM_W * 2.0f / 3.0f + 2.0f)
+#define CHANGE_IP_Y   (BAR_H + 2.0f)
+#define CHANGE_IP_W   (BOTTOM_W / 3.0f - 4.0f)
+#define CHANGE_IP_H   22.0f
+
+enum { TARGET_NONE, TARGET_BAR, TARGET_PAD, TARGET_CHIP, TARGET_KEY, TARGET_BUTTON };
 
 #define CLR(r, g, b) C2D_Color32((r), (g), (b), 255)
 
+// USB HID usage IDs the code needs to recognise
+#define HID_ENTER      0x28
+#define HID_ESC        0x29
+#define HID_BACKSPACE  0x2A
+#define HID_SPACE      0x2C
+#define HID_CAPS       0x39
+#define HID_HOME       0x4A
+#define HID_DELETE     0x4C
+#define HID_END        0x4D
+
+#define SHIFT_MASK     (MOD_LSHIFT | MOD_RSHIFT)
+
 // ---------------------------------------------------------------------------
 // Keyboard layout
-//   Each key: label, USB HID usage ID (what the PC receives), width in key-units.
-//   Toggle keys (Ctrl, Alt, Shift, Win) also carry the MOD_* bit they latch.
-//   Every row adds up to 15 units wide.
+//   Each key: label, label with Shift on (or NULL), USB HID usage ID (what the PC
+//   receives), width in key-units. Toggle keys (Ctrl, Alt, Shift, Win) also carry
+//   the MOD_* bit they latch. Every row adds up to 15 units wide.
 // ---------------------------------------------------------------------------
-typedef struct { const char *label; u8 hid; u8 modBit; float units; } KeyDef;
+typedef struct { const char *label; const char *shiftLabel; u8 hid; u8 modBit; float units; } KeyDef;
 typedef struct { const KeyDef *keys; int count; float height; } RowDef;
 
-#define K(label, hid, units)        { label, hid, 0, units }
-#define M(label, hid, bit, units)   { label, hid, bit, units }
-#define WIN_LABEL "#WIN"            // drawn as a 4-square logo instead of text
+#define K(label, hid, units)         { label, NULL, hid, 0, units }
+#define S(label, shifted, hid, units) { label, shifted, hid, 0, units }
+#define LT(lower, upper, hid)        { lower, upper, hid, 0, 1.0f }      // a letter
+#define M(label, hid, bit, units)    { label, NULL, hid, bit, units }
+#define WIN_LABEL  "#WIN"            // drawn as a 4-square logo instead of text
+#define BKSP_LABEL "#BKSP"           // drawn as a back arrow instead of text
 
 static const KeyDef ROW0[] = {
     K("Esc", 0x29, 1.0f),
@@ -47,28 +70,29 @@ static const KeyDef ROW0[] = {
     K("Del", 0x4C, 2.0f),
 };
 static const KeyDef ROW1[] = {
-    K("`", 0x35, 1.0f), K("1", 0x1E, 1.0f), K("2", 0x1F, 1.0f), K("3", 0x20, 1.0f),
-    K("4", 0x21, 1.0f), K("5", 0x22, 1.0f), K("6", 0x23, 1.0f), K("7", 0x24, 1.0f),
-    K("8", 0x25, 1.0f), K("9", 0x26, 1.0f), K("0", 0x27, 1.0f), K("-", 0x2D, 1.0f),
-    K("=", 0x2E, 1.0f), K("Bksp", 0x2A, 2.0f),
+    S("`", "~", 0x35, 1.0f), S("1", "!", 0x1E, 1.0f), S("2", "@", 0x1F, 1.0f),
+    S("3", "#", 0x20, 1.0f), S("4", "$", 0x21, 1.0f), S("5", "%", 0x22, 1.0f),
+    S("6", "^", 0x23, 1.0f), S("7", "&", 0x24, 1.0f), S("8", "*", 0x25, 1.0f),
+    S("9", "(", 0x26, 1.0f), S("0", ")", 0x27, 1.0f), S("-", "_", 0x2D, 1.0f),
+    S("=", "+", 0x2E, 1.0f), K(BKSP_LABEL, 0x2A, 2.0f),
 };
 static const KeyDef ROW2[] = {
-    K("Tab", 0x2B, 1.5f), K("Q", 0x14, 1.0f), K("W", 0x1A, 1.0f), K("E", 0x08, 1.0f),
-    K("R", 0x15, 1.0f), K("T", 0x17, 1.0f), K("Y", 0x1C, 1.0f), K("U", 0x18, 1.0f),
-    K("I", 0x0C, 1.0f), K("O", 0x12, 1.0f), K("P", 0x13, 1.0f), K("[", 0x2F, 1.0f),
-    K("]", 0x30, 1.0f), K("\\", 0x31, 1.5f),
+    K("Tab", 0x2B, 1.5f), LT("q", "Q", 0x14), LT("w", "W", 0x1A), LT("e", "E", 0x08),
+    LT("r", "R", 0x15), LT("t", "T", 0x17), LT("y", "Y", 0x1C), LT("u", "U", 0x18),
+    LT("i", "I", 0x0C), LT("o", "O", 0x12), LT("p", "P", 0x13), S("[", "{", 0x2F, 1.0f),
+    S("]", "}", 0x30, 1.0f), S("\\", "|", 0x31, 1.5f),
 };
 static const KeyDef ROW3[] = {
-    K("Caps", 0x39, 1.75f), K("A", 0x04, 1.0f), K("S", 0x16, 1.0f), K("D", 0x07, 1.0f),
-    K("F", 0x09, 1.0f), K("G", 0x0A, 1.0f), K("H", 0x0B, 1.0f), K("J", 0x0D, 1.0f),
-    K("K", 0x0E, 1.0f), K("L", 0x0F, 1.0f), K(";", 0x33, 1.0f), K("'", 0x34, 1.0f),
+    K("Caps", 0x39, 1.75f), LT("a", "A", 0x04), LT("s", "S", 0x16), LT("d", "D", 0x07),
+    LT("f", "F", 0x09), LT("g", "G", 0x0A), LT("h", "H", 0x0B), LT("j", "J", 0x0D),
+    LT("k", "K", 0x0E), LT("l", "L", 0x0F), S(";", ":", 0x33, 1.0f), S("'", "\"", 0x34, 1.0f),
     K("Enter", 0x28, 2.25f),
 };
 static const KeyDef ROW4[] = {
     M("Shift", 0xE1, MOD_LSHIFT, 2.25f),
-    K("Z", 0x1D, 1.0f), K("X", 0x1B, 1.0f), K("C", 0x06, 1.0f), K("V", 0x19, 1.0f),
-    K("B", 0x05, 1.0f), K("N", 0x11, 1.0f), K("M", 0x10, 1.0f), K(",", 0x36, 1.0f),
-    K(".", 0x37, 1.0f), K("/", 0x38, 1.0f),
+    LT("z", "Z", 0x1D), LT("x", "X", 0x1B), LT("c", "C", 0x06), LT("v", "V", 0x19),
+    LT("b", "B", 0x05), LT("n", "N", 0x11), LT("m", "M", 0x10), S(",", "<", 0x36, 1.0f),
+    S(".", ">", 0x37, 1.0f), S("/", "?", 0x38, 1.0f),
     M("Shift", 0xE5, MOD_RSHIFT, 2.75f),
 };
 static const KeyDef ROW5[] = {
@@ -77,10 +101,11 @@ static const KeyDef ROW5[] = {
     M("Alt", 0xE6, MOD_RALT, 1.5f), K("Menu", 0x65, 1.5f),
     M("Ctrl", 0xE4, MOD_RCTRL, 1.5f),
 };
-static const KeyDef ROW6[] = {
+static const KeyDef ROW6[] = {   // navigation and media (the D-Pad is the arrow keys)
     K("Ins", 0x49, 1.5f), K("Home", 0x4A, 1.5f), K("PgUp", 0x4B, 1.5f),
     K("PgDn", 0x4E, 1.5f), K("End", 0x4D, 1.5f),
-    K("<", 0x50, 1.875f), K("v", 0x51, 1.875f), K("^", 0x52, 1.875f), K(">", 0x4F, 1.875f),
+    K("PrntScr", 0x46, 1.875f), K("Vol+", 0x80, 1.875f),
+    K("Vol-", 0x81, 1.875f), K("Mute", 0x7F, 1.875f),
 };
 
 #define ROW(arr, h) { arr, (int)(sizeof(arr) / sizeof((arr)[0])), h }
@@ -93,25 +118,40 @@ static const RowDef ROWS[] = {
 // ---------------------------------------------------------------------------
 // Drawing helpers
 // ---------------------------------------------------------------------------
+static void fillRectZ(float x, float y, float w, float h, u32 clr, float z)
+{
+    C2D_DrawRectSolid(x, y, z, w, h, clr);
+}
+
 static void fillRect(float x, float y, float w, float h, u32 clr)
 {
-    C2D_DrawRectSolid(x, y, 0.0f, w, h, clr);
+    fillRectZ(x, y, w, h, clr, 0.0f);
+}
+
+static void drawLabelZ(const C2D_Text *t, float x, float y, float scale, u32 clr, float z)
+{
+    C2D_DrawText(t, C2D_WithColor, x, y, z, scale, scale, clr);
 }
 
 static void drawLabel(const C2D_Text *t, float x, float y, float scale, u32 clr)
 {
-    C2D_DrawText(t, C2D_WithColor, x, y, 0.5f, scale, scale, clr);
+    drawLabelZ(t, x, y, scale, clr, 0.5f);
+}
+
+void ui_draw_rounded_rect_z(float x, float y, float w, float h, float r, u32 clr, float z)
+{
+    C2D_DrawRectSolid(x + r, y,     z, w - 2.0f * r, h, clr);
+    C2D_DrawRectSolid(x,     y + r, z, r, h - 2.0f * r, clr);
+    C2D_DrawRectSolid(x + w - r, y + r, z, r, h - 2.0f * r, clr);
+    C2D_DrawCircleSolid(x + r,     y + r,     z, r, clr);
+    C2D_DrawCircleSolid(x + w - r, y + r,     z, r, clr);
+    C2D_DrawCircleSolid(x + r,     y + h - r, z, r, clr);
+    C2D_DrawCircleSolid(x + w - r, y + h - r, z, r, clr);
 }
 
 void ui_draw_rounded_rect(float x, float y, float w, float h, float r, u32 clr)
 {
-    C2D_DrawRectSolid(x + r, y,     0.0f, w - 2.0f * r, h, clr);
-    C2D_DrawRectSolid(x,     y + r, 0.0f, r, h - 2.0f * r, clr);
-    C2D_DrawRectSolid(x + w - r, y + r, 0.0f, r, h - 2.0f * r, clr);
-    C2D_DrawCircleSolid(x + r,     y + r,     0.0f, r, clr);
-    C2D_DrawCircleSolid(x + w - r, y + r,     0.0f, r, clr);
-    C2D_DrawCircleSolid(x + r,     y + h - r, 0.0f, r, clr);
-    C2D_DrawCircleSolid(x + w - r, y + h - r, 0.0f, r, clr);
+    ui_draw_rounded_rect_z(x, y, w, h, r, clr, 0.0f);
 }
 
 // Three simple monochrome icons, each about 14 x 14 pixels.
@@ -142,6 +182,15 @@ static void drawIconKeyboard(float x, float y, u32 fg, u32 bg)
     for (int i = 0; i < 3; i++)                                          // middle row
         fillRect(x + 3.5f + 3.0f * i, y + 6.6f, 1.6f, 1.6f, bg);
     fillRect(x + 4.0f, y + 9.4f, 6.0f, 1.4f, bg);                        // space bar
+}
+
+// The Backspace key's icon: a left-pointing arrow (a shaft and a stepped arrowhead),
+// about 13 x 9 pixels, centered on (cx, cy).
+static void drawBackspaceIcon(float cx, float cy, u32 clr)
+{
+    fillRect(cx - 4.0f, cy - 1.0f, 10.0f, 2.0f, clr);                    // shaft
+    for (int i = 0; i < 5; i++)                                          // head: taller away from the tip
+        fillRect(cx - 7.0f + i, cy - 0.5f - i, 1.0f, 1.0f + 2.0f * i, clr);
 }
 
 static void drawBar(const TouchUI *ui)
@@ -217,15 +266,58 @@ static void drawChips(const TouchUI *ui)
 }
 
 // ---------------------------------------------------------------------------
+// Shift / Caps Lock: which characters the keys show (and type)
+// ---------------------------------------------------------------------------
+static bool isShiftOn(const TouchUI *ui)
+{
+    return ui->shiftHeld || (ui->latchedMods & SHIFT_MASK) != 0;
+}
+
+static bool isCapsOn(const TouchUI *ui)
+{
+    return ui->ipEntry ? ui->ipCaps : ui->capsLock;
+}
+
+// Letters are uppercase when Caps Lock and Shift disagree (Caps on without Shift, or
+// Shift without Caps). Every other key with a second symbol shows it while Shift is on.
+static bool showsShifted(const TouchUI *ui, const UiKey *k)
+{
+    if (!k->shiftLabel)
+        return false;
+    if (k->isLetter)
+        return isCapsOn(ui) != isShiftOn(ui);
+    return isShiftOn(ui);
+}
+
+// The character a key types into the IP box (0 if it isn't a printable key)
+static char keyChar(const TouchUI *ui, const UiKey *k)
+{
+    if (k->hid == HID_SPACE)
+        return ' ';
+    const u8 h = k->hid;
+    const bool printable = (h >= 0x04 && h <= 0x27) || (h >= 0x2D && h <= 0x31) || (h >= 0x33 && h <= 0x38);
+    if (!printable)
+        return 0;
+    const char *s = showsShifted(ui, k) ? k->shiftLabel : k->label;
+    return s ? s[0] : 0;
+}
+
+// ---------------------------------------------------------------------------
 // Keyboard drawing
 // ---------------------------------------------------------------------------
 static void drawKeyboard(const TouchUI *ui)
 {
+    const bool caps = isCapsOn(ui);
+
     for (int i = 0; i < ui->numKeys; i++)
     {
         const UiKey *k = &ui->keys[i];
-        const bool pressed = (ui->heldKey != 0 && ui->activeKey == i);
-        const bool lit = (k->modBit != 0) && (ui->latchedMods & k->modBit);
+        const bool pressed = (ui->activeKey == i) && (ui->heldKey != 0 || ui->ipEntry);
+        bool lit = (k->modBit != 0) && (ui->latchedMods & k->modBit);
+        if (k->modBit == MOD_LSHIFT || k->modBit == MOD_RSHIFT)
+            lit = lit || ui->shiftHeld;                  // the L/R buttons light the Shift keys too
+        if (k->hid == HID_CAPS)
+            lit = caps;
 
         u32 clr = k->modBit ? CLR(48, 48, 58) : CLR(64, 64, 74);
         if (lit)     clr = CLR(70, 140, 230);
@@ -242,7 +334,16 @@ static void drawKeyboard(const TouchUI *ui)
             const float ly = k->y + (k->h - (2.0f * s + g)) / 2.0f;
             for (int a = 0; a < 2; a++)
                 for (int b = 0; b < 2; b++)
-                    fillRect(lx + a * (s + g), ly + b * (s + g), s, s, CLR(240, 240, 245));
+                    fillRectZ(lx + a * (s + g), ly + b * (s + g), s, s, CLR(240, 240, 245), 0.2f);
+        }
+        else if (strcmp(k->label, BKSP_LABEL) == 0)
+        {
+            drawBackspaceIcon(k->x + k->w / 2.0f, k->y + k->h / 2.0f, CLR(240, 240, 245));
+        }
+        else if (showsShifted(ui, k))
+        {
+            drawLabel(&k->shiftText, k->x + (k->w - k->shiftW) / 2.0f,
+                      k->y + (k->h - k->shiftH) / 2.0f, k->textScale, CLR(240, 240, 245));
         }
         else
         {
@@ -250,6 +351,20 @@ static void drawKeyboard(const TouchUI *ui)
                       k->y + (k->h - k->textH) / 2.0f, k->textScale, CLR(240, 240, 245));
         }
     }
+}
+
+static void drawChangeIpButton(const TouchUI *ui)
+{
+    // Drawn in front of the keys underneath it (higher layer), so their labels don't show through
+    ui_draw_rounded_rect_z(CHANGE_IP_X, CHANGE_IP_Y, CHANGE_IP_W, CHANGE_IP_H, 5.0f, CLR(60, 110, 190), 0.6f);
+    drawLabelZ(&ui->changeIpText, CHANGE_IP_X + (CHANGE_IP_W - ui->changeIpW) / 2.0f,
+               CHANGE_IP_Y + (CHANGE_IP_H - ui->changeIpH) / 2.0f, 0.45f, CLR(255, 255, 255), 0.9f);
+}
+
+static bool inChangeIp(int px, int py)
+{
+    return px >= CHANGE_IP_X && px < CHANGE_IP_X + CHANGE_IP_W &&
+           py >= CHANGE_IP_Y && py < CHANGE_IP_Y + CHANGE_IP_H;
 }
 
 // ---------------------------------------------------------------------------
@@ -270,21 +385,29 @@ static void layoutKeys(TouchUI *ui)
             const KeyDef *def = &ROWS[r].keys[c];
             UiKey *k = &ui->keys[ui->numKeys++];
 
-            k->label  = def->label;
-            k->hid    = def->hid;
-            k->modBit = def->modBit;
+            k->label      = def->label;
+            k->shiftLabel = def->shiftLabel;
+            k->hid        = def->hid;
+            k->modBit     = def->modBit;
+            k->isLetter   = (def->hid >= 0x04 && def->hid <= 0x1D);
             k->x = x;
             k->y = y;
             k->w = def->units * KEY_UNIT;
             k->h = ROWS[r].height;
             x += k->w;
 
-            if (strcmp(def->label, WIN_LABEL) != 0)
+            if (strcmp(def->label, WIN_LABEL) != 0 && strcmp(def->label, BKSP_LABEL) != 0)
             {
                 k->textScale = (strlen(def->label) == 1) ? 0.5f : 0.38f;
                 C2D_TextParse(&k->text, ui->textBuf, def->label);
                 C2D_TextOptimize(&k->text);
                 C2D_TextGetDimensions(&k->text, k->textScale, k->textScale, &k->textW, &k->textH);
+                if (def->shiftLabel)
+                {
+                    C2D_TextParse(&k->shiftText, ui->textBuf, def->shiftLabel);
+                    C2D_TextOptimize(&k->shiftText);
+                    C2D_TextGetDimensions(&k->shiftText, k->textScale, k->textScale, &k->shiftW, &k->shiftH);
+                }
             }
         }
         y += ROWS[r].height + 1.0f;
@@ -319,12 +442,122 @@ void touchui_init(TouchUI *ui, bool isNew3DS)
         C2D_TextGetDimensions(&ui->chipText[i], 0.45f, 0.45f, &ui->chipTextW[i], &ui->chipTextH[i]);
     }
 
+    C2D_TextParse(&ui->changeIpText, ui->textBuf, "Change IP?");
+    C2D_TextOptimize(&ui->changeIpText);
+    C2D_TextGetDimensions(&ui->changeIpText, 0.45f, 0.45f, &ui->changeIpW, &ui->changeIpH);
+
     layoutKeys(ui);
 }
 
 void touchui_exit(TouchUI *ui)
 {
     C2D_TextBufDelete(ui->textBuf);
+}
+
+void touchui_set_current_ip(TouchUI *ui, const char *ip)
+{
+    snprintf(ui->currentIp, sizeof(ui->currentIp), "%s", ip);
+}
+
+// ---------------------------------------------------------------------------
+// The "Change IP?" text box
+// ---------------------------------------------------------------------------
+static void ipInsert(TouchUI *ui, char c)
+{
+    if (ui->ipLen >= IP_MAX_LEN)
+        return;
+    memmove(&ui->ipText[ui->ipCursor + 1], &ui->ipText[ui->ipCursor], ui->ipLen - ui->ipCursor + 1);
+    ui->ipText[ui->ipCursor] = c;
+    ui->ipLen++;
+    ui->ipCursor++;
+    ui->ipError = false;
+}
+
+static void ipBackspace(TouchUI *ui)
+{
+    if (ui->ipCursor <= 0)
+        return;
+    memmove(&ui->ipText[ui->ipCursor - 1], &ui->ipText[ui->ipCursor], ui->ipLen - ui->ipCursor + 1);
+    ui->ipLen--;
+    ui->ipCursor--;
+    ui->ipError = false;
+}
+
+static void ipDelete(TouchUI *ui)
+{
+    if (ui->ipCursor >= ui->ipLen)
+        return;
+    memmove(&ui->ipText[ui->ipCursor], &ui->ipText[ui->ipCursor + 1], ui->ipLen - ui->ipCursor);
+    ui->ipLen--;
+    ui->ipError = false;
+}
+
+static void ipMove(TouchUI *ui, int to)
+{
+    if (to < 0) to = 0;
+    if (to > ui->ipLen) to = ui->ipLen;
+    ui->ipCursor = to;
+}
+
+static void releaseKey(TouchUI *ui);
+
+static void openIpEntry(TouchUI *ui)
+{
+    releaseKey(ui);
+    ui->latchedMods = 0;
+    ui->winPulseFrames = 0;
+    ui->changeIpVisible = false;
+    ui->ipEntry = true;
+    ui->ipError = false;
+    ui->ipCaps = false;
+    snprintf(ui->ipText, sizeof(ui->ipText), "%s", ui->currentIp);   // start from the IP in use
+    ui->ipLen = (int)strlen(ui->ipText);
+    ui->ipCursor = ui->ipLen;
+}
+
+static void closeIpEntry(TouchUI *ui)
+{
+    ui->ipEntry = false;
+    ui->ipError = false;
+    ui->ipCaps = false;
+    ui->latchedMods = 0;
+}
+
+static void submitIp(TouchUI *ui)
+{
+    struct in_addr addr;
+    if (ui->ipLen > 0 && inet_pton(AF_INET, ui->ipText, &addr) == 1)
+    {
+        snprintf(ui->ipSubmitText, sizeof(ui->ipSubmitText), "%s", ui->ipText);
+        ui->ipSubmitted = true;
+        closeIpEntry(ui);
+    }
+    else
+    {
+        ui->ipError = true;       // stay open so it can be fixed
+    }
+}
+
+// A key tapped while the box is open types into the box and is never sent to the PC.
+static void ipKeyPress(TouchUI *ui, const UiKey *k)
+{
+    switch (k->hid)
+    {
+        case HID_ENTER:     submitIp(ui); break;
+        case HID_ESC:       closeIpEntry(ui); break;                // cancel
+        case HID_BACKSPACE: ipBackspace(ui); break;
+        case HID_DELETE:    ipDelete(ui); break;
+        case HID_HOME:      ipMove(ui, 0); break;
+        case HID_END:       ipMove(ui, ui->ipLen); break;
+        case HID_CAPS:      ui->ipCaps = !ui->ipCaps; break;
+        default:
+        {
+            const char c = keyChar(ui, k);
+            if (c)
+                ipInsert(ui, c);
+        }
+    }
+    ui->latchedMods = 0;          // a regular key uses up any lit Shift/Ctrl/Alt/Win
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +580,10 @@ static void resetInputs(TouchUI *ui)
     ui->tapFrames = 0;
     ui->latchedMods = 0;
     ui->winPulseFrames = 0;
+    ui->changeIpVisible = false;
+    ui->ipEntry = false;
+    ui->ipError = false;
+    ui->ipCaps = false;
     releaseKey(ui);
 }
 
@@ -378,7 +615,7 @@ static void pressKey(TouchUI *ui, int idx)
         // A toggle key: lights up (or turns off) and waits for the next regular key.
         // Tapping an already-lit Windows key sends a lone Windows-key press instead
         // (this is how you open the Start menu).
-        if (k->modBit == MOD_LWIN && (ui->latchedMods & MOD_LWIN))
+        if (k->modBit == MOD_LWIN && (ui->latchedMods & MOD_LWIN) && !ui->ipEntry)
         {
             ui->latchedMods &= ~MOD_LWIN;
             ui->winPulseFrames = WIN_TAP_FRAMES;
@@ -389,6 +626,17 @@ static void pressKey(TouchUI *ui, int idx)
         }
         return;
     }
+
+    if (ui->ipEntry)
+    {
+        ipKeyPress(ui, k);
+        ui->activeKey = idx;            // only so the key shows as pressed
+        return;
+    }
+
+    // Track the PC's Caps Lock so the letters can show the right case
+    if (k->hid == HID_CAPS)
+        ui->capsLock = !ui->capsLock;
 
     // A regular key: the lit toggles apply to it, then switch off.
     if (ui->heldKey)
@@ -416,7 +664,17 @@ static void beginTouch(TouchUI *ui, int px, int py, u64 now)
         int i = (px * 3) / (int)BOTTOM_W;
         if (i < 0) i = 0;
         if (i > 2) i = 2;
-        setMode(ui, (UiMode)i);
+
+        if (i == 2 && ui->mode == UI_MODE_KEYBOARD)
+        {
+            // Tapping the Keyboard button again shows or hides the "Change IP?" button
+            if (!ui->ipEntry)
+                ui->changeIpVisible = !ui->changeIpVisible;
+        }
+        else
+        {
+            setMode(ui, (UiMode)i);
+        }
         return;
     }
 
@@ -435,6 +693,12 @@ static void beginTouch(TouchUI *ui, int px, int py, u64 now)
 
     if (ui->mode == UI_MODE_KEYBOARD)
     {
+        if (ui->changeIpVisible && inChangeIp(px, py))
+        {
+            openIpEntry(ui);
+            ui->target = TARGET_BUTTON;
+            return;
+        }
         const int k = keyAt(ui, px, py);
         if (k >= 0)
         {
@@ -495,12 +759,19 @@ static void endTouch(TouchUI *ui, u64 now)
             else
                 ui->releasePending = true;              // too quick: hold it a few more frames
         }
+        else
+        {
+            ui->activeKey = -1;                         // a toggle key, or a key typed into the IP box
+        }
     }
     ui->target = TARGET_NONE;
 }
 
 void touchui_update(TouchUI *ui, u32 down, u32 held, u32 up, touchPosition touch, u64 nowMs)
 {
+    // In keyboard mode L and R are Shift; the keyboard shows the shifted keys while they are held
+    ui->shiftHeld = (ui->mode == UI_MODE_KEYBOARD) && (held & (KEY_L | KEY_R));
+
     if (ui->heldKey)
     {
         if (ui->heldFrames < 255)
@@ -516,6 +787,15 @@ void touchui_update(TouchUI *ui, u32 down, u32 held, u32 up, touchPosition touch
         beginTouch(ui, touch.px, touch.py, nowMs);
     else if ((held & KEY_TOUCH) && ui->target == TARGET_PAD)
         moveTouch(ui, touch.px, touch.py);
+
+    // While the IP box is open the buttons edit the box instead of controlling the PC
+    if (ui->ipEntry)
+    {
+        if (down & (KEY_A | KEY_START)) submitIp(ui);
+        if (ui->ipEntry && (down & KEY_B)) ipBackspace(ui);
+        if (ui->ipEntry && (down & KEY_DLEFT)) ipMove(ui, ui->ipCursor - 1);
+        if (ui->ipEntry && (down & KEY_DRIGHT)) ipMove(ui, ui->ipCursor + 1);
+    }
 }
 
 void touchui_fill_packet(TouchUI *ui, ControllerPacket *pkt)
@@ -553,6 +833,22 @@ void touchui_fill_packet(TouchUI *ui, ControllerPacket *pkt)
     pkt->modifiers = mods;
     pkt->key = ui->heldKey;
     pkt->reserved = 0;
+
+    // Typing into the IP box: nothing goes to the PC
+    if (ui->ipEntry)
+    {
+        pkt->modifiers = 0;
+        pkt->key = 0;
+    }
+}
+
+bool touchui_take_submitted_ip(TouchUI *ui, char *out, size_t size)
+{
+    if (!ui->ipSubmitted)
+        return false;
+    ui->ipSubmitted = false;
+    snprintf(out, size, "%s", ui->ipSubmitText);
+    return true;
 }
 
 u32 touchui_background(const TouchUI *ui)
@@ -568,9 +864,15 @@ u32 touchui_background(const TouchUI *ui)
 void touchui_draw(const TouchUI *ui)
 {
     if (ui->mode == UI_MODE_MOUSE)
+    {
         drawChips(ui);
+    }
     else if (ui->mode == UI_MODE_KEYBOARD)
+    {
         drawKeyboard(ui);
+        if (ui->changeIpVisible)
+            drawChangeIpButton(ui);
+    }
 
     drawBar(ui);
 }

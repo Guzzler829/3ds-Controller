@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""3DS Controller - PC receiver (v2.0.0)
+"""3DS Controller - PC receiver (v2.1.0)
 
 Turns the packets from the 3DS into:
   * a virtual gamepad          (controller mode)
@@ -76,6 +76,9 @@ def _build_keymap():
         (0x4F, "RIGHT", 0x27, True), (0x50, "LEFT", 0x25, True),
         (0x51, "DOWN", 0x28, True), (0x52, "UP", 0x26, True),
         (0x65, "COMPOSE", 0x5D, True),                    # the Menu / Application key
+        (0x46, "SYSRQ", 0x2C, False),                     # Print Screen
+        (0x7F, "MUTE", 0xAD, False), (0x80, "VOLUMEUP", 0xAF, False),
+        (0x81, "VOLUMEDOWN", 0xAE, False),
         (0xE0, "LEFTCTRL", 0xA2, False), (0xE1, "LEFTSHIFT", 0xA0, False),
         (0xE2, "LEFTALT", 0xA4, False), (0xE3, "LEFTMETA", 0x5B, True),
         (0xE4, "RIGHTCTRL", 0xA3, True), (0xE5, "RIGHTSHIFT", 0xA1, False),
@@ -88,7 +91,36 @@ def _build_keymap():
 
 KEYMAP = _build_keymap()
 HID_ENTER, HID_RIGHT, HID_LEFT, HID_DOWN, HID_UP = 0x28, 0x4F, 0x50, 0x51, 0x52
+HID_BACKSPACE, HID_C, HID_V = 0x2A, 0x06, 0x19
+HID_LCTRL, HID_LSHIFT, HID_RSHIFT = 0xE0, 0xE1, 0xE5
 FIRST_MODIFIER_HID = 0xE0
+
+# What the 3DS's own buttons do in the mouse and keyboard modes.
+# (3DS button bits, what they press). Chords list the modifier first.
+MOUSE_MODE_MOUSE_BUTTONS = (
+    ("left",    KEY_A | KEY_L),
+    ("right",   KEY_B | KEY_R),
+    ("back",    KEY_Y | KEY_ZL),
+    ("forward", KEY_X | KEY_ZR),
+)
+MOUSE_MODE_KEYS = (
+    (KEY_START,  (HID_ENTER,)),
+    (KEY_DUP,    (HID_UP,)), (KEY_DDOWN,  (HID_DOWN,)),
+    (KEY_DLEFT,  (HID_LEFT,)), (KEY_DRIGHT, (HID_RIGHT,)),
+)
+KEYBOARD_MODE_MOUSE_BUTTONS = (
+    ("back",    KEY_ZL),
+    ("forward", KEY_ZR),
+)
+KEYBOARD_MODE_KEYS = (
+    (KEY_A,      (HID_ENTER,)), (KEY_START, (HID_ENTER,)),
+    (KEY_B,      (HID_BACKSPACE,)),
+    (KEY_L,      (HID_LSHIFT,)), (KEY_R, (HID_RSHIFT,)),
+    (KEY_Y,      (HID_LCTRL, HID_C)),           # Copy  = Ctrl+C
+    (KEY_X,      (HID_LCTRL, HID_V)),           # Paste = Ctrl+V
+    (KEY_DUP,    (HID_UP,)), (KEY_DDOWN,  (HID_DOWN,)),
+    (KEY_DLEFT,  (HID_LEFT,)), (KEY_DRIGHT, (HID_RIGHT,)),
+)
 
 # ---------------------------------------------------------------------------
 # Tuning
@@ -372,30 +404,29 @@ class Bridge:
     def _desktop(self, pkt):
         b = pkt.buttons
 
+        mouse_mode = (pkt.mode == MODE_MOUSE)
+        button_table = MOUSE_MODE_MOUSE_BUTTONS if mouse_mode else KEYBOARD_MODE_MOUSE_BUTTONS
+        key_table = MOUSE_MODE_KEYS if mouse_mode else KEYBOARD_MODE_KEYS
+
         # --- mouse buttons: the touchscreen tap plus the physical buttons ---
         wanted = set()
-        if (pkt.mouse_buttons & MOUSE_LEFT) or (b & (KEY_A | KEY_L)):
+        if pkt.mouse_buttons & MOUSE_LEFT:
             wanted.add("left")
-        if b & (KEY_B | KEY_R):
-            wanted.add("right")
-        if b & (KEY_Y | KEY_ZL):
-            wanted.add("back")
-        if b & (KEY_X | KEY_ZR):
-            wanted.add("forward")
+        for name, mask in button_table:
+            if b & mask:
+                wanted.add(name)
         self._sync_buttons(wanted)
 
-        # --- keyboard: modifiers + typed key from the touch keyboard, plus Enter and arrows ---
+        # --- keyboard: modifiers + typed key from the touch keyboard, plus the physical buttons ---
         keys = set()
         for bit in range(8):
             if pkt.modifiers & (1 << bit):
                 keys.add(FIRST_MODIFIER_HID + bit)
         if pkt.key:
             keys.add(pkt.key)
-        if b & KEY_START: keys.add(HID_ENTER)
-        if b & KEY_DUP:   keys.add(HID_UP)
-        if b & KEY_DDOWN: keys.add(HID_DOWN)
-        if b & KEY_DLEFT: keys.add(HID_LEFT)
-        if b & KEY_DRIGHT: keys.add(HID_RIGHT)
+        for mask, hids in key_table:
+            if b & mask:
+                keys.update(hids)
         self._sync_keys(keys)
 
         # --- cursor movement and scrolling ---
@@ -489,7 +520,7 @@ def main():
     sock.bind(("0.0.0.0", PORT))
     sock.settimeout(0.05)
 
-    print("3DS Controller PC Receiver (v2.0.0)")
+    print("3DS Controller PC Receiver (v2.1.0)")
     print("Listening on port %d..." % PORT)
     print("Press Ctrl+C to exit")
     if debug:
