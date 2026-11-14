@@ -1,17 +1,7 @@
 # 3DS Controller
 
-### An up-to-date 3DS homebrew application that lets you use your (New or Old) Nintendo 3DS or 2DS as a wireless controller for Windows and Linux.
+### A 3DS homebrew application that lets you use your (New or Old) Nintendo 3DS or 2DS as a wireless controller for Windows and Linux.
 
-My fork! I initially wasn't going to publish this, but it ended up being so much better that I thought the rest of the world needed this, too. I'm no 3DS developer, or even a C developer, so these changes are made by Claude. See the CHANGELOG.md for another note on AI. I haven't experienced any new bugs so far that I haven't already gotten fixed by Claude.
-
-### Fixes:
-- ZL, ZR, and C-stick now work from a tiny fix. Before, they didn't do anything as a result of `pc.py` not mapping them correctly.
-- Fixed a bug that would disconnect the 3DS quite often. The connection is very stable now (dependent on your wifi)
-- The screen doesn't flash anymore
-- Turning off the LCD and then pressing Home doesn't crash the system; it just turns the LCD back on.
-- Minor cosmetic repair
-
-## Original Readme text:
 
 ## Features
 - Use your 3DS as a wireless gamepad for PC games and emulators
@@ -21,15 +11,6 @@ My fork! I initially wasn't going to publish this, but it ended up being so much
 - Low latency wireless connection
 - Battery level indicator
 - LCD toggle option to save battery
-
-## Q&A
-Q: Why Create this?
-- A: [A similar application](https://github.com/CTurt/3DSController) exists but is no longer maintained or functional.
-
-Q: Why is linux so much more complicated to setup?
-- A: i honestly don't fucking know. i'm not the person to ask.
-
-[![wakatime](https://wakatime.com/badge/user/5089f166-a996-455c-8cbe-f75a0e2076db.svg)](https://wakatime.com/@5089f166-a996-455c-8cbe-f75a0e2076db)
 
 ## Requirements
 
@@ -89,7 +70,10 @@ Q: Why is linux so much more complicated to setup?
 4. Connect and start using your 3DS as a controller
 
 ### Control Mapping
+#### All modes
+| Hold SELECT button | Toggle LCD on/off |
 
+#### Controller mode
 | 3DS Input | PC Controller Output |
 |-----------|----------------------|
 | A/B/X/Y Buttons | A/B/X/Y Buttons |
@@ -99,6 +83,34 @@ Q: Why is linux so much more complicated to setup?
 | L/R Buttons | LB/RB (Left/Right Bumpers) |
 | ZL/ZR Buttons | LT/RT (Left/Right Triggers) |
 | Start/Select | Start/Back |
+
+#### Mouse mode
+| 3DS Input | PC Mouse Output |
+|-----------|----------------------|
+| Touchscreen | Move mouse |
+| Circle Pad | Toggle between move mouse or scroll up & down |
+| C-Stick | Toggle between move mouse or scroll up & down |
+| D-Pad | Arrow Keys |
+| L button/A button | Left click |
+| R button/B button | Right click |
+| ZL button/Y button | Back |
+| ZR button/X button | Forward |
+| START button | Enter |
+
+#### Keyboard mode
+| 3DS Input | PC Keyboard Output |
+|-----------|--------------------|
+| Touch | Press keys |
+| Tap Keyboard tab again | Drop-down: "Change IP?" |
+| A button/START button | Enter|
+| B button | Backspace |
+| L button/R button | Shift |
+| Y button | Copy |
+| X button | Paste |
+| D-pad | Arrow keys |
+| ZL button/ZR button | Back/Forward |
+| Circle Pad | Move Cursor |
+| C-stick | Scroll |
 
 ## Configuration
 
