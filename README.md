@@ -16,7 +16,7 @@
 
 ### 3DS
 - Nintendo 3DS with custom firmware (CFW)
-- Homebrew Launcher access
+- Homebrew Launcher access or ability to install CIA files
 - Wi-Fi connection (same network as PC)
 
 ### PC
@@ -28,9 +28,17 @@
 ## Installation
 
 ### 3DS Setup
-1. Copy `3ds_controller.3dsx` to your 3DS SD card in `/3ds/` folder
+#### Method 1: Homebrew menu
+1. Copy `3ds_controller_vX.X.X.3dsx` to your 3DS' SD card in `/3ds/` folder
 2. Launch Homebrew Launcher on your 3DS
 3. Run the 3DS Controller application
+
+#### Method 2: Home screen
+1. Copy `3ds_controller_vX.X.X.cia" onto your 3DS' SD card
+2. Open FBI or another tool that can install CIA files, I **highly** recommend [3dsDL](https://github.com/ankushKun/3dsDL), it's a really great tool.
+3. Select the option to install a CIA from the SD card
+4. Either install and keep the file, or install and delete; you don't need to keep the file if you don't want to.
+5. Launch from the home screen, or, if using 3dsDL, select Launch after it installs.
 
 ### PC Setup
 
