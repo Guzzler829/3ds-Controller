@@ -1,10 +1,11 @@
 # 3DS Controller
 
-### A 3DS homebrew application that lets you use your (New or Old) Nintendo 3DS or 2DS as a wireless controller for Windows and Linux.
+### A 3DS homebrew application that lets you use your (New or Old) Nintendo 3DS or 2DS as a wireless controller, keyboard, and mouse for Windows and Linux.
 
 
 ## Features
 - Use your 3DS as a wireless gamepad for PC games and emulators
+- Use your 3DS as a keyboard or mouse. C-stick can be mapped to scroll or move cursor
 - Cross-platform support for Windows and Linux
 - Support for all buttons, Circle Pad, and C-Stick
 - Configurable server IP and port
