@@ -75,7 +75,7 @@
 ## Usage
 1. Start PC receiver script
 2. Launch 3DS Controller on your 3DS
-3. Set the IP address in the 3DS app to match your PC's IP
+3. Set the IP address in the 3DS app to match your PC's IP by tapping Keyboard again, then tap "Change IP?" The top screen will have an input box to set the IP.
 4. Connect and start using your 3DS as a controller
 
 ### Control Mapping
