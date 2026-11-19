@@ -7,6 +7,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include "audio.h"
 #include <netinet/in.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -19,6 +20,7 @@
 #define DEFAULT_SERVER_IP "192.168.1.1"
 #define CONFIG_FILE "config.ini"   // keep relative: "sdmc:/config.ini" hung at startup in testing
 #define MAX_LINE 256
+#define AU_KEY_MAX_CFG 64
 #define LCD_TOGGLE_KEY KEY_SELECT
 #define LCD_TOGGLE_HOLD_TIME 5000  // hold SELECT this long (ms) to toggle the screens
 #define CLOCK_24H 0                // 1 = 13:45, 0 = 1:45 PM
@@ -61,21 +63,30 @@
 typedef struct {
     char serverip[64];
     int port;
+    // audio streaming (see README): off unless turned on with the speaker button
+    bool audio;
+    char audiohost[64];      // empty = the same PC as serverip
+    int audioport;
+    int audiorate;           // 16000, 24000 or 32000
+    int audiochannels;       // 1 or 2
+    char audiopass[AU_KEY_MAX_CFG + 1];
 } config;
+
+static bool writeconfigfile(const config *cfg);
 
 void readconfigfile(config *cfg) {
     strcpy(cfg->serverip, DEFAULT_SERVER_IP);
     cfg->port = DEFAULT_PORT;
+    cfg->audio = false;
+    cfg->audiohost[0] = '\0';
+    cfg->audioport = 8889;
+    cfg->audiorate = 24000;
+    cfg->audiochannels = 2;
+    cfg->audiopass[0] = '\0';
 
     FILE *file = fopen(CONFIG_FILE, "r");
     if (!file) {
-        // No config yet: create one with the defaults
-        file = fopen(CONFIG_FILE, "w");
-        if (file) {
-            fprintf(file, "serverip=%s\n", DEFAULT_SERVER_IP);
-            fprintf(file, "port=%d\n", DEFAULT_PORT);
-            fclose(file);
-        }
+        writeconfigfile(cfg);    // no config yet: create one with the defaults
         return;
     }
 
@@ -86,19 +97,31 @@ void readconfigfile(config *cfg) {
             line[--len] = '\0';
         }
 
-        char *key = strtok(line, "=");
-        char *value = strtok(NULL, "=");
+        // split at the FIRST '=': everything after it is the value (a password may contain '=')
+        char *key = line;
+        char *value = strchr(line, '=');
+        if (!value) continue;
+        *value++ = '\0';
 
-        if (key && value) {
-            while (*key && (*key == ' ' || *key == '\t')) key++;
-            while (*value && (*value == ' ' || *value == '\t')) value++;
+        while (*key == ' ' || *key == '\t') key++;
+        while (*value == ' ' || *value == '\t') value++;
 
-            if (strcmp(key, "serverip") == 0) {
-                strncpy(cfg->serverip, value, sizeof(cfg->serverip) - 1);
-                cfg->serverip[sizeof(cfg->serverip) - 1] = '\0';
-            } else if (strcmp(key, "port") == 0) {
-                cfg->port = atoi(value);
-            }
+        if (strcmp(key, "serverip") == 0) {
+            snprintf(cfg->serverip, sizeof(cfg->serverip), "%s", value);
+        } else if (strcmp(key, "port") == 0) {
+            cfg->port = atoi(value);
+        } else if (strcmp(key, "audio") == 0) {
+            cfg->audio = atoi(value) != 0;
+        } else if (strcmp(key, "audiohost") == 0) {
+            snprintf(cfg->audiohost, sizeof(cfg->audiohost), "%s", value);
+        } else if (strcmp(key, "audioport") == 0) {
+            cfg->audioport = atoi(value);
+        } else if (strcmp(key, "audiorate") == 0) {
+            cfg->audiorate = atoi(value);
+        } else if (strcmp(key, "audiochannels") == 0) {
+            cfg->audiochannels = atoi(value);
+        } else if (strcmp(key, "audiopass") == 0) {
+            snprintf(cfg->audiopass, sizeof(cfg->audiopass), "%s", value);
         }
     }
 
@@ -111,8 +134,20 @@ static bool writeconfigfile(const config *cfg) {
     if (!file) return false;
     fprintf(file, "serverip=%s\n", cfg->serverip);
     fprintf(file, "port=%d\n", cfg->port);
+    fprintf(file, "audio=%d\n", cfg->audio ? 1 : 0);
+    fprintf(file, "audiohost=%s\n", cfg->audiohost);
+    fprintf(file, "audioport=%d\n", cfg->audioport);
+    fprintf(file, "audiorate=%d\n", cfg->audiorate);
+    fprintf(file, "audiochannels=%d\n", cfg->audiochannels);
+    fprintf(file, "audiopass=%s\n", cfg->audiopass);
     fclose(file);
     return true;
+}
+
+// Gives the audio module the current settings (the audio host defaults to the controller's PC)
+static void applyAudioConfig(const config *cfg) {
+    audio_configure(cfg->audiohost[0] ? cfg->audiohost : cfg->serverip,
+                    cfg->audioport, cfg->audiorate, cfg->audiochannels, cfg->audiopass);
 }
 
 int initsocket(const config *cfg) {
@@ -254,8 +289,8 @@ static void drawWifiIcon(float x, float y, bool connected, int strength) {
 // ---------------------------------------------------------------------------
 typedef struct {
     // title and status rows
-    C2D_Text title, lblStatus, lblServer, lblBattery, lblDisplay;
-    C2D_Text vConnected, vNoConn, vOn, vOff;
+    C2D_Text title, lblStatus, lblServer, lblBattery, lblDisplay, lblAudio;
+    C2D_Text vConnected, vNoConn, vOn, vOff, vAudio;
     C2D_Text vServer, battery, clock;       // these three are refilled when they change
     // headers over the controls list
     C2D_Text hdrController, hdrMouse, hdrKeyboard;
@@ -277,6 +312,7 @@ static void buildTopTexts(TopTexts *t, C2D_TextBuf buf) {
     parsetext(&t->lblServer,  buf, "Server:");
     parsetext(&t->lblBattery, buf, "Battery:");
     parsetext(&t->lblDisplay, buf, "Display:");
+    parsetext(&t->lblAudio,   buf, "Audio:");
     parsetext(&t->vConnected, buf, "CONNECTED");
     parsetext(&t->vNoConn,    buf, "NO CONNECTION");
     parsetext(&t->vOn,        buf, "ON");
@@ -425,6 +461,7 @@ int main(int argc, char **argv) {
     C3D_RenderTarget *bottom = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
 
     socInit((u32*)memalign(0x1000, 0x100000), 0x100000);
+    audio_init();
     ptmuInit();
     acInit();                                  // wifi status
     g_mcuReady = R_SUCCEEDED(mcuHwcInit());    // exact battery percentage (optional)
@@ -436,6 +473,7 @@ int main(int argc, char **argv) {
     config cfg;
     readconfigfile(&cfg);
 
+    applyAudioConfig(&cfg);
     int sockfd = initsocket(&cfg);
     int isconnected = 0;
     int lcdstate = 1;
@@ -458,6 +496,8 @@ int main(int argc, char **argv) {
     TouchUI ui;
     touchui_init(&ui, isNew3DS);
     touchui_set_current_ip(&ui, cfg.serverip);
+    touchui_set_audio(&ui, cfg.audio, AUDIO_OFF);
+    audio_set_enabled(cfg.audio);
 
     // ---- Top screen text ----
     C2D_TextBuf staticbuf = C2D_TextBufNew(2048);
@@ -564,6 +604,7 @@ int main(int argc, char **argv) {
             snprintf(cfg.serverip, sizeof(cfg.serverip), "%s", newip);
             writeconfigfile(&cfg);
             touchui_set_current_ip(&ui, cfg.serverip);
+            applyAudioConfig(&cfg);              // an empty audiohost follows the new IP
             if (sockfd >= 0) close(sockfd);
             sockfd = initsocket(&cfg);
             lastPongMs = 0;                      // "NO CONNECTION" until the new PC answers
@@ -571,6 +612,19 @@ int main(int argc, char **argv) {
             lastReconnectMs = now;
             serverDirty = true;
         }
+
+        // ---- Audio: the speaker button turns it on and off; remember the choice ----
+        if (ui.audioOn != audio_enabled()) {
+            audio_set_enabled(ui.audioOn);
+            cfg.audio = ui.audioOn;
+            writeconfigfile(&cfg);
+        }
+        audio_update(now);
+        {
+            static AudioState lastAudio = AUDIO_OFF;
+            if (audio_state() != lastAudio) { lastAudio = audio_state(); serverDirty = true; }
+        }
+        touchui_set_audio(&ui, ui.audioOn, audio_state());
 
         // ---- Build and send this frame's packet ----
         ControllerPacket pkt;
@@ -617,6 +671,7 @@ int main(int argc, char **argv) {
             parsetext(&tx.vServer, dynbuf, servertext);
             parsetext(&tx.battery, dynbuf, batterystr);
             parsetext(&tx.clock, dynbuf, clockstr);
+            parsetext(&tx.vAudio, dynbuf, audio_state_text(audio_state()));
             C2D_TextGetDimensions(&tx.clock, CLOCK_SCALE, CLOCK_SCALE, &clockW, &clockH);
             snprintf(lastclock, sizeof(lastclock), "%s", clockstr);
             serverDirty = false;
@@ -644,6 +699,14 @@ int main(int argc, char **argv) {
         drawtext(&tx.lblStatus, labelx, y, STATUS_SCALE, clrgray);
         if (isconnected) drawtext(&tx.vConnected, VALUE_X, y, STATUS_SCALE, clrlgreen);
         else             drawtext(&tx.vNoConn,    VALUE_X, y, STATUS_SCALE, clrlred);
+        {   // Audio status, in the right column of the same row
+            const AudioState as = audio_state();
+            drawtext(&tx.lblAudio, RIGHT_LABEL_X, y, STATUS_SCALE, clrgray);
+            drawtext(&tx.vAudio, RIGHT_VALUE_X - 6.0f, y, STATUS_SCALE,
+                     as == AUDIO_PLAYING ? clrlgreen
+                     : as == AUDIO_OFF ? clrgray
+                     : (as == AUDIO_CONNECTING || as == AUDIO_BUFFERING) ? clrwhite : clrlred);
+        }
         y += STATUS_ROW_H;
 
         drawtext(&tx.lblServer, labelx, y, STATUS_SCALE, clrgray);
@@ -696,6 +759,7 @@ int main(int argc, char **argv) {
         close(sockfd);
     }
 
+    audio_exit();
     touchui_exit(&ui);
     C2D_TextBufDelete(ipbuf);
     C2D_TextBufDelete(dynbuf);

@@ -43,7 +43,7 @@ GFXBUILD	:=	$(BUILD)
 
 APP_TITLE       := 3DS Controller
 APP_DESCRIPTION := Use 3DS as a wireless PC controller
-APP_AUTHOR      := icicle1133
+APP_AUTHOR      := Guzzler829, icicle1133
 APP_PRODUCT_CODE := CTR-P-3DSC
 APP_UNIQUE_ID   := 0xA1B2C
 

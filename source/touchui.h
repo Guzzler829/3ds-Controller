@@ -8,6 +8,8 @@
 #define BOTTOM_W 320.0f
 #define BOTTOM_H 240.0f
 #define BAR_H    24.0f        // height of the three mode buttons along the top
+#define AUDIO_BTN_W 36.0f     // the speaker button at the right end of that bar
+#define BAR_W    (BOTTOM_W - AUDIO_BTN_W)   // the three mode buttons share this width
 
 #define MAX_KEYS   100
 #define IP_MAX_LEN 31         // longest host IP the "Change IP?" box accepts
@@ -69,6 +71,10 @@ typedef struct {
     char   ipSubmitText[IP_MAX_LEN + 1];
     char   currentIp[IP_MAX_LEN + 1];   // the IP in use now (the box starts with this)
 
+    // Audio streaming: the speaker button at the right end of the bar
+    bool   audioOn;          // toggled by tapping it; main.c turns the stream on and off to match
+    int    audioLevel;       // 0 off, 1 connecting/buffering, 2 playing, 3 problem (colors the icon)
+
     // Layout and text
     UiKey  keys[MAX_KEYS];
     int    numKeys;
@@ -95,6 +101,9 @@ void touchui_fill_packet(TouchUI *ui, ControllerPacket *pkt);
 
 // True once, after a valid new IP was entered. Copies it to `out`.
 bool touchui_take_submitted_ip(TouchUI *ui, char *out, size_t size);
+
+// Tells the UI whether audio is on, and how it is doing (an AudioState value from audio.h).
+void touchui_set_audio(TouchUI *ui, bool on, int audioState);
 
 // Color to clear the bottom screen with (depends on the mode).
 u32  touchui_background(const TouchUI *ui);

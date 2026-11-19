@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""3DS Controller - PC receiver (v2.1.0)
+"""3DS Controller - PC receiver (v2.2.0)
 
 Turns the packets from the 3DS into:
   * a virtual gamepad          (controller mode)
@@ -9,8 +9,9 @@ Linux:   uses uinput (three virtual devices: gamepad, mouse, keyboard)
 Windows: uses vgamepad for the gamepad and SendInput for the mouse/keyboard
 
 Run with --debug to see what is arriving.
+Run with --audio to also stream the PC's sound to the 3DS (see the README; needs numpy and soundcard).
 """
-import socket, struct, time, signal, sys, os, datetime, platform, math
+import socket, struct, time, signal, sys, os, datetime, platform, math, argparse
 from collections import namedtuple
 
 PORT = 8888
@@ -503,7 +504,19 @@ def create_backend():
 
 
 def main():
-    debug = "--debug" in sys.argv
+    parser = argparse.ArgumentParser(description="3DS Controller PC receiver")
+    parser.add_argument("--debug", action="store_true", help="print what is arriving")
+    audio_server = None
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import audio_server        # only needs numpy/soundcard once --audio is actually used
+        audio_server.add_arguments(parser)
+    except Exception as e:         # never let the optional audio part stop the controller from working
+        audio_server = None
+        parser.add_argument("--audio", action="store_true", help=argparse.SUPPRESS)
+        audio_import_error = e
+    args = parser.parse_args()
+    debug = args.debug
     running = [True]
 
     def stop(sig, frame):
@@ -520,11 +533,26 @@ def main():
     sock.bind(("0.0.0.0", PORT))
     sock.settimeout(0.05)
 
-    print("3DS Controller PC Receiver (v2.1.0)")
+    print("3DS Controller PC Receiver (v2.2.0)")
     print("Listening on port %d..." % PORT)
     print("Press Ctrl+C to exit")
     if debug:
         print("Debug mode enabled")
+
+    audio = None
+    if audio_server is not None and args.list_audio_devices:
+        audio_server.list_devices()
+        return
+    if args.audio:
+        if audio_server is None:
+            print("Audio is not available: %s" % audio_import_error)
+        else:
+            try:
+                audio = audio_server.AudioServer(args.audio_port, args.audio_password, args.audio_device, args.audio_test, silence_pc=not args.audio_pc_sound)
+                audio.start()
+            except Exception as e:
+                print("Audio could not start: %s" % e)
+                audio = None
 
     devices = {}                 # ip -> last time we heard from it
     last_packet = time.time()
@@ -573,6 +601,11 @@ def main():
                 del devices[ip]
     finally:
         print("Shutting down...")
+        if audio is not None:
+            try:
+                audio.stop()
+            except Exception:
+                pass
         try:
             bridge.release_all()
             backend.gamepad_reset()

@@ -25,9 +25,9 @@
 #define KEY_UNIT      (BOTTOM_W / 15.0f)   // the keyboard is 15 key-widths wide
 
 // The "Change IP?" button sits right under the Keyboard button (the right-hand third of the bar)
-#define CHANGE_IP_X   (BOTTOM_W * 2.0f / 3.0f + 2.0f)
+#define CHANGE_IP_X   (BAR_W * 2.0f / 3.0f + 2.0f)
 #define CHANGE_IP_Y   (BAR_H + 2.0f)
-#define CHANGE_IP_W   (BOTTOM_W / 3.0f - 4.0f)
+#define CHANGE_IP_W   (BAR_W / 3.0f - 4.0f)
 #define CHANGE_IP_H   22.0f
 
 enum { TARGET_NONE, TARGET_BAR, TARGET_PAD, TARGET_CHIP, TARGET_KEY, TARGET_BUTTON };
@@ -195,7 +195,7 @@ static void drawBackspaceIcon(float cx, float cy, u32 clr)
 
 static void drawBar(const TouchUI *ui)
 {
-    const float bw = BOTTOM_W / 3.0f;
+    const float bw = BAR_W / 3.0f;
     for (int i = 0; i < 3; i++)
     {
         const bool active = ((int)ui->mode == i);
@@ -214,6 +214,34 @@ static void drawBar(const TouchUI *ui)
         else if (i == 1) drawIconMouse(gx, iy, fg, bg);
         else             drawIconKeyboard(gx, iy, fg, bg);
         drawLabel(&ui->barText[i], gx + 19.0f, (BAR_H - ui->barTextH[i]) / 2.0f, 0.45f, fg);
+    }
+}
+
+// The speaker button at the right end of the bar: dim with a cross when audio is off, colored when it is on.
+static void drawAudioButton(const TouchUI *ui)
+{
+    const float x0 = BAR_W;
+    const u32 bg = ui->audioOn ? CLR(60, 64, 78) : CLR(38, 38, 44);
+    u32 fg = CLR(150, 150, 158);
+    if (ui->audioOn)
+        fg = ui->audioLevel == 2 ? CLR(120, 230, 130) : ui->audioLevel == 3 ? CLR(240, 120, 120) : CLR(240, 230, 150);
+    fillRect(x0, 0.0f, AUDIO_BTN_W, BAR_H, bg);
+    const float cx = x0 + 9.0f, cy = BAR_H / 2.0f;
+    fillRect(cx, cy - 3.0f, 4.0f, 6.0f, fg);                                  // speaker body
+    for (int k = 0; k < 4; k++)                                               // cone, widening to the right
+        fillRect(cx + 4.0f + k * 1.5f, cy - 3.0f - k * 1.2f, 1.5f, 6.0f + k * 2.4f, fg);
+    if (ui->audioOn)
+    {
+        fillRect(cx + 12.0f, cy - 2.0f, 1.0f, 4.0f, fg);                      // sound waves
+        fillRect(cx + 15.0f, cy - 4.0f, 1.0f, 8.0f, fg);
+    }
+    else
+    {
+        for (int k = 0; k < 7; k++)                                           // a cross: "off"
+        {
+            fillRect(cx + 12.0f + k, cy - 3.0f + k, 1.5f, 1.5f, CLR(220, 110, 110));
+            fillRect(cx + 12.0f + k, cy + 3.0f - k, 1.5f, 1.5f, CLR(220, 110, 110));
+        }
     }
 }
 
@@ -661,7 +689,12 @@ static void beginTouch(TouchUI *ui, int px, int py, u64 now)
     if (py < (int)BAR_H)
     {
         ui->target = TARGET_BAR;
-        int i = (px * 3) / (int)BOTTOM_W;
+        if (px >= (int)BAR_W)
+        {
+            ui->audioOn = !ui->audioOn;           // the speaker button
+            return;
+        }
+        int i = (px * 3) / (int)BAR_W;
         if (i < 0) i = 0;
         if (i > 2) i = 2;
 
@@ -875,4 +908,12 @@ void touchui_draw(const TouchUI *ui)
     }
 
     drawBar(ui);
+    drawAudioButton(ui);
+}
+
+void touchui_set_audio(TouchUI *ui, bool on, int audioState)
+{
+    ui->audioOn = on;
+    // AudioState values: 0 off, 1 connecting, 2 buffering, 3 playing, 4.. problems
+    ui->audioLevel = audioState == 3 ? 2 : (audioState == 1 || audioState == 2) ? 1 : audioState >= 4 ? 3 : 0;
 }
